@@ -77,6 +77,8 @@
     path: "/etc/icingaweb2/enabledModules/{{ item }}"
   loop:
     '{{ icingaweb_modules_disabled }}'
+  loop_control:
+    label: "  module: {{ item }}"
 
 - name: enable icingaweb modules
   file:
@@ -89,6 +91,8 @@
     force: true
   loop:
     '{{ icingaweb_modules_enabled | list }}'
+  loop_control:
+    label: "  module: {{ item }}"
 
 - name: create monitoring modules configuration
   template:
@@ -115,8 +119,11 @@
     database_name: "{{ icingaweb_auth_backend.database.dbname }}"
     database_config_file: /etc/icingaweb2/.my.cnf
   no_log: true
+  register: import_icingaweb2_users
   loop:
     "{{ icingaweb_users }}"
+  loop_control:
+    label: " username: {{ item.username }}, state: {{ item.state | default('present') }}"
   when:
     - icingaweb_users is defined
     - icingaweb_users | count != 0
@@ -124,6 +131,15 @@
     - icingaweb_auth_backend.database is defined
     - icingaweb_auth_backend.database.host is defined
     - icingaweb_auth_backend.database.dbname is defined
+
+- name: error
+  fail:
+    msg:
+      - "ERROR: {{ import_icingaweb2_users }}"
+  when:
+    - import_icingaweb2_users is defined
+    - import_icingaweb2_users.failed is defined
+    - import_icingaweb2_users.failed
 
 - name: change ownership of /etc/icingaweb2 directory
   file:
@@ -133,3 +149,5 @@
     group: "{{ icingaweb_group }}"
     mode: 0750
     # recurse: true
+
+...

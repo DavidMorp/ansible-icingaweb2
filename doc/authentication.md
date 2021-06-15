@@ -26,7 +26,7 @@ icingaweb_authentication:
     # login per user (emailname without domain part)
     #   sAMAccountName
     user_name_attribute: "userPrincipalName"
-    filter: "(|(memberOf=CN=svc_icinga_viewer,DC=foo,DC=bar)(memberOf=CN=svc_icinga_admin,DC=foo,DC=bar))"
+    filter: "(|(memberOf=cn=svc_icinga_viewer,dc=icinga,dc=local)(memberOf=cn=svc_icinga_admin,dc=icinga,dc=local))"
 
 icingaweb_groups:
   ldap_groups:
