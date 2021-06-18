@@ -34,6 +34,32 @@ ANSIBLE_METADATA = {
     'supported_by': 'community'
 }
 
+DOCUMENTATION = """
+---
+module: icingawweb_database_user.py
+author:
+    - 'Bodo Schulz'
+short_description: handle user and they preferences in a mysql.
+description: ''
+"""
+
+EXAMPLES = """
+- name: import icingaweb users into database
+  become: true
+  icingaweb_database_user:
+    state: present
+    username: user_1
+    password: s3cur3
+    active: true
+    preferences:
+      language: de_DE
+      timezone: Europe/Berlin
+    force: false
+    database_login_host: database
+    database_name: icingaweb_config
+    database_config_file: /etc/icingaweb2/.my.cnf
+"""
+
 
 class IcingaWeb2DatabaseUser(object):
     """
@@ -50,6 +76,7 @@ class IcingaWeb2DatabaseUser(object):
         self.state = module.params.get("state")
         self.username = module.params.get("username")
         self.password = module.params.get("password")
+        self.active = module.params.get("active")
         self.preferences = module.params.get("preferences")
         self.force = module.params.get("force")
 
@@ -95,6 +122,7 @@ class IcingaWeb2DatabaseUser(object):
         password_hash = self.__password_hash(self.password)
         password_checksum = self.__checksum(self.password)
         preferences_checksum = self.__checksum(str(self.preferences))
+        user_should_active = 0
         password_checksum_exists = ''
         preferences_checksum_exists = ''
 
@@ -106,11 +134,13 @@ class IcingaWeb2DatabaseUser(object):
             """
             with open(file_name) as f:
                 data = json.load(f)
+                user_should_active = data.get(self.username).get('active', 1)
                 password_checksum_exists = data.get(self.username).get('checksum')
                 preferences_checksum_exists = data.get(self.username).get('preferences_checksum', {})
 
+        # user_active = (user_should_active == self.active)
         preferences_up2date = (preferences_checksum_exists == preferences_checksum)
-        user_up2date = (password_checksum_exists == password_checksum)
+        user_up2date = (password_checksum_exists == password_checksum and user_should_active == self.active)
 
         # self.module.log(msg="user_up2date       : {}".format(user_up2date))
         # self.module.log(msg="preferences_up2date: {}".format(preferences_up2date))
@@ -119,7 +149,7 @@ class IcingaWeb2DatabaseUser(object):
         if preferences_up2date and user_up2date and not self.force:
             msg = []
             if user_up2date:
-                msg.append("user or password have not been changed")
+                msg.append("user, password or active state have not been changed")
             if preferences_up2date:
                 msg.append("preference have not been changed")
 
@@ -133,7 +163,19 @@ class IcingaWeb2DatabaseUser(object):
                 msg=message
             )
 
-        state, error, error_message = self.__insert_user(self.username, password_hash)
+        user_exists, error, error_message = self.__list_user(self.username)
+
+        if error:
+            return dict(
+                failed=True,
+                msg=error_message
+            )
+
+        if user_exists:
+            state, error, error_message = self.__update_user(self.username, password_hash)
+        else:
+            state, error, error_message = self.__insert_user(self.username, password_hash)
+
         if error:
             return dict(
                 failed=True,
@@ -150,6 +192,7 @@ class IcingaWeb2DatabaseUser(object):
 
         data = {
             self.username: {
+                "active": self.active,
                 "hashed": password_hash,
                 "checksum": password_checksum,
                 "preferences_checksum": preferences_checksum
@@ -159,10 +202,16 @@ class IcingaWeb2DatabaseUser(object):
         if self.force:
             message = "user {} forced inserted".format(self.username)
         else:
-            message = "user {} successful inserted".format(self.username)
+            state_msg = "inserted"
 
-        with open(file_name, 'w') as fp:
-            json.dump(data, fp)
+            if user_exists:
+                state_msg = "updated"
+
+            message = "user {} successful {}".format(self.username, state_msg)
+
+        data_file = open(file_name, 'w')
+        data_file.write(json.dumps(data, indent=2))
+        data_file.close()
 
         return dict(
             changed=True,
@@ -183,31 +232,54 @@ class IcingaWeb2DatabaseUser(object):
         password_hash = hashlib.sha256(password_bytes)
         return password_hash.hexdigest()
 
-    def __insert_user(self, username, password_hash):
+    def __list_user(self, user):
         """
-
         """
-        q = "insert ignore into icingaweb_user (name, active, password_hash) VALUES ('{}', {}, '{}');"
-        q = q.format(username, '1', password_hash)
+        number_of_rows = 0
 
         cursor, conn, error, message = self.__mysql_connect()
-
-        self.module.log(msg="  - error: {0} | msg: {1}".format(error, message))
 
         if error:
             return False, error, message
 
-        try:
-            self.module.log(msg="query      : {}".format(q))
-            cursor.execute(q)
-        except Exception as e:
-            if not self.db_autocommit:
-                conn.rollback()
+        q = "select name from icingaweb_user where name = '{}'"
+        q = q.format(user)
 
+        try:
+            number_of_rows = cursor.execute(q)
+            cursor.fetchone()
             cursor.close()
+
+        except Exception as e:
             self.module.fail_json(msg="Cannot execute SQL '%s' : %s" % (q, to_native(e)))
 
-        conn.close()
+        if number_of_rows == 1:
+            return True, False, ""
+        else:
+            return False, False, ""
+
+    def __insert_user(self, username, password_hash):
+        """
+
+        """
+        cursor, conn, error, message = self.__mysql_connect()
+
+        if error:
+            return False, error, message
+
+        active = self.__int_from_bool(self.active)
+
+        q = "insert ignore into icingaweb_user (name, active, password_hash) VALUES ('{}', {}, '{}');"
+        q = q.format(username, active, password_hash)
+
+        try:
+            cursor.execute(q)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            self.module.fail_json(msg="Cannot execute SQL '%s' : %s" % (q, to_native(e)))
+        finally:
+            cursor.close()
 
         return True, False, None
 
@@ -215,26 +287,24 @@ class IcingaWeb2DatabaseUser(object):
         """
 
         """
-        q = "update icingaweb_user set password_hash = '{}' where name = '{}';".format(password_hash, username)
+        active = self.__int_from_bool(self.active)
 
-        self.module.log(msg=" => {}".format(q))
+        q = "update icingaweb_user set active = {}, password_hash = '{}' where name = '{}';"
+        q = q.format(active, password_hash, username)
 
         cursor, conn, error, message = self.__mysql_connect()
-
-        self.module.log(msg="  - error: {0} | msg: {1}".format(error, message))
 
         if error:
             return None, error, message
 
         try:
-            self.module.log(msg="query      : {}".format(q))
             cursor.execute(q)
+            conn.commit()
         except Exception as e:
-            if not self.db_autocommit:
-                conn.rollback()
-
-            cursor.close()
+            conn.rollback()
             self.module.fail_json(msg="Cannot execute SQL '%s' : %s" % (q, to_native(e)))
+        finally:
+            cursor.close()
 
         conn.close()
 
@@ -242,25 +312,31 @@ class IcingaWeb2DatabaseUser(object):
 
     def __int_from_bool(self, value=False):
         if value:
-            return '1'
+            return 1
         else:
-            return '0'
+            return 0
 
     def __insert_preferences(self, username, preferences):
         """
         """
         queries = []
-        q = "insert ignore into icingaweb_user_preference (username, section, name, value) values ('{}', 'section', '{}', '{}')"
+        q = "insert into icingaweb_user_preference "
+        q += "(username, section, name, value) values ('{0}', 'section', '{1}', '{2}') "
 
         if(preferences):
-            # for k in preferences.items():
-            #     self.module.log(msg=" => {}".format(k))
+            """
+            """
+            cursor, conn, error, message = self.__mysql_connect()
+
+            if error:
+                return False, error, message
 
             _auto_refresh = self.__int_from_bool(preferences.get('auto_refresh', False))
             _show_application_msg = self.__int_from_bool(preferences.get('show_application_state_messages', False))
             _show_benchmark = self.__int_from_bool(preferences.get('show_benchmark', False))
             _show_stacktraces = self.__int_from_bool(preferences.get('show_stacktraces', False))
 
+            queries.append("delete from icingaweb_user_preference where username = '{}'".format(username))
             queries.append(q.format(username, 'auto_refresh', _auto_refresh))
             queries.append(q.format(username, 'show_application_state_messages', _show_application_msg))
             queries.append(q.format(username, 'show_benchmark', _show_benchmark))
@@ -272,24 +348,15 @@ class IcingaWeb2DatabaseUser(object):
             if(preferences.get('default_page_size')):
                 queries.append(q.format(username, 'default_page_size', preferences.get('default_page_size')))
 
-            cursor, conn, error, message = self.__mysql_connect()
-
-            self.module.log(msg="  - error: {0} | msg: {1}".format(error, message))
-
-            if error:
-                return False, error, message
-
             for q in queries:
-                self.module.log(msg=" => {}".format(q))
                 try:
                     cursor.execute(q)
-                except Exception as e:
-                    if not self.db_autocommit:
-                        conn.rollback()
 
-                    cursor.close()
+                except Exception as e:
+                    conn.rollback()
                     self.module.fail_json(msg="Cannot execute SQL '%s' : %s" % (q, to_native(e)))
 
+            conn.commit()
             conn.close()
 
         return True, False, None
@@ -320,7 +387,7 @@ class IcingaWeb2DatabaseUser(object):
 
         config['db'] = self.database_name
 
-        self.module.log(msg="config : {}".format(config))
+        # self.module.log(msg="config : {}".format(config))
 
         try:
             db_connection = mysql_driver.connect(**config)
@@ -355,6 +422,7 @@ def main():
             state=dict(default="present", choices=["absent", "present"]),
             username=dict(required=True, no_log=False),
             password=dict(required=True, no_log=True),
+            active=dict(required=False, default=True, type="bool"),
             preferences=dict(required=False, type="dict"),
             force=dict(required=False, default=False, type="bool"),
 
