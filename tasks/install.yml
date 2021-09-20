@@ -1,6 +1,5 @@
 ---
 
-# get file or directory stats
 - name: install requirements
   package:
     name:
