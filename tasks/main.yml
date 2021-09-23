@@ -25,3 +25,10 @@
   include_tasks: modules/install.yml
   tags:
     - icingaweb_modules
+
+- name: enable and start php
+  service:
+    name: php7.4-fpm
+    enabled: yes
+    state: started
+  ignore_errors: yes
