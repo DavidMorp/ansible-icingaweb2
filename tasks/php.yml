@@ -1,0 +1,123 @@
+---
+# Buil-in php-fpm
+# Tested on Debian 11
+# Enable by setting install_minimal_php_fpm
+- name: install requirements
+  apt:
+    name:
+      - php-common
+      - php-mysql
+      - php-cli
+      - php-fpm
+      - icinga-php-common
+      - icinga-php-library
+      - icinga-php-thirdparty
+    state: present
+- name: ensure log directory exist
+  file:
+    path: /var/log/php-fpm
+    state: directory
+    mode: 0755
+
+- name: delete the default pool configuration file
+  file:
+    path: "{{ php_fpm_pool_conf_path }}/{{ php_fpm_default_pool.name }}"
+    state: absent
+  when:
+    - php_fpm_default_pool.delete
+
+- block:
+    - name: ensure the modules directory {{ php_modules_conf_paths }} exists
+      file:
+        path: "{{ php_modules_conf_paths }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 0750
+      when:
+        - php_modules_conf_paths is defined
+
+    - name: configure modules
+      template:
+        src: php_module.ini.j2
+        dest: "{{ php_modules_conf_paths }}/{{ item.name }}.ini"
+        mode: 0644
+        backup: true
+      when: item.enabled | bool | default(false)
+      loop:
+        '{{ php_modules }}'
+      loop_control:
+        label: "{{ item.name }} - enabled: {{ item.enabled }}"
+
+    - name: enable modules
+      file:
+        src: "{{ php_modules_conf_paths }}/{{ item.0.name }}.ini"
+        dest: "{{ item.1 }}{{ '/conf.d/' if ansible_os_family | lower != 'redhat' else '/' }}{{ item.0.priority | default(20) }}-{{ item.0.name }}.ini"
+        state: link
+        force: true
+      when:
+        - item.0.enabled | bool | default(false)
+      with_nested:
+        - '{{ php_modules }}'
+        - "{{ php_conf_paths }}"
+      loop_control:
+        label: "{{ item.0.name }} - enabled: {{ item.0.enabled }}"
+      notify:
+        - restart php-fpm
+
+    - name: disable modules
+      file:
+        path: "{{ item.1 }}{{ '/conf.d/' if ansible_os_family | lower != 'redhat' else '/' }}{{ item.0.priority | default(20) }}-{{ item.0.name }}.ini"
+        state: absent
+      when:
+        - not item.0.enabled | bool | default(false)
+      with_nested:
+        - '{{ php_modules }}'
+        - "{{ php_conf_paths }}"
+      loop_control:
+        label: "{{ item.0.name }} - enabled: {{ item.0.enabled }}"
+      notify:
+        - restart php-fpm
+
+  when:
+    - php_modules_conf_paths is defined
+
+- name: assert needed pool variables
+  assert:
+    msg: "needed variable are not defined"
+    that:
+      - item.group is defined
+      - item.pm is defined and (item.pm == 'static' or item.pm == 'dynamic' or item.pm == 'ondemand')
+      - item['pm.max_children'] is defined
+      - item['pm.start_servers'] is defined
+      - item['pm.min_spare_servers'] is defined
+      - item['pm.max_spare_servers'] is defined
+    quiet: true
+  when:
+    - php_fpm_pools | length > 0
+  loop:
+    "{{ php_fpm_pools }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: create pool configuration
+  template:
+    src: pool.conf.j2
+    dest: "{{ php_fpm_pool_conf_path }}/{{ item.name }}.conf"
+    mode: 0644
+    backup: true
+  loop:
+    "{{ php_fpm_pools }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - php_fpm_pools | length > 0
+  # notify:
+  #   - restart php-fpm
+
+- name: enable and start php
+  service:
+    name: php7.4-fpm
+    enabled: yes
+    state: started
+  ignore_errors: yes

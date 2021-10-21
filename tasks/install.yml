@@ -1,17 +1,5 @@
 ---
 
-- name: install requirements
-  package:
-    name:
-      - php-common
-      - php-mysql
-      - php-cli
-      - php-fpm
-      - icinga-php-common
-      - icinga-php-library
-      - icinga-php-thirdparty
-    state: present
-
 - name: install icingaweb2
   package:
     name:
