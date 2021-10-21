@@ -1,0 +1,10 @@
+---
+# Debian based
+php_fpm_pool_user_default: www-data
+php_version: 7.4
+php_modules_conf_paths: /etc/php/{{ php_version }}/mods-available
+php_fpm_conf_path: /etc/php/{{ php_version }}/fpm
+php_fpm_pool_conf_path: /etc/php/{{ php_version }}/fpm/pool.d
+php_conf_paths:
+  - /etc/php/{{ php_version }}/fpm
+  - /etc/php/{{ php_version }}/cli
